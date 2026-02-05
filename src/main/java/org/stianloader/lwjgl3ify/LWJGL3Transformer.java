@@ -1,52 +1,52 @@
-package de.geolykt.starloader.lwjgl3ify;
+package org.stianloader.lwjgl3ify;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 
-import me.coley.cafedude.classfile.ClassFile;
-import me.coley.cafedude.classfile.ConstPool;
-import me.coley.cafedude.classfile.Method;
-import me.coley.cafedude.classfile.attribute.Attribute;
-import me.coley.cafedude.classfile.attribute.CodeAttribute;
-import me.coley.cafedude.classfile.constant.ConstPoolEntry;
-import me.coley.cafedude.classfile.constant.CpClass;
-import me.coley.cafedude.classfile.constant.CpFieldRef;
-import me.coley.cafedude.classfile.constant.CpMethodRef;
-import me.coley.cafedude.classfile.constant.CpNameType;
-import me.coley.cafedude.classfile.constant.CpUtf8;
-import me.coley.cafedude.classfile.instruction.Instruction;
-import me.coley.cafedude.classfile.instruction.IntOperandInstruction;
-import me.coley.cafedude.classfile.instruction.Opcodes;
-import me.coley.cafedude.io.ClassFileReader;
-import me.coley.cafedude.io.ClassFileWriter;
-import me.coley.cafedude.io.InstructionReader;
-import me.coley.cafedude.io.InstructionWriter;
-import software.coley.llzip.ZipIO;
-import software.coley.llzip.format.compression.ZipCompressions;
-import software.coley.llzip.format.model.CentralDirectoryFileHeader;
-import software.coley.llzip.format.model.LocalFileHeader;
-import software.coley.llzip.format.model.PartType;
-import software.coley.llzip.format.model.ZipArchive;
-import software.coley.llzip.format.model.ZipPart;
-import software.coley.llzip.format.write.JavaZipWriterStrategy;
-import software.coley.llzip.format.write.ZipWriterStrategy;
-import software.coley.llzip.util.BufferData;
-import software.coley.llzip.util.ByteData;
-import software.coley.llzip.util.ByteDataUtil;
+import software.coley.cafedude.classfile.ClassFile;
+import software.coley.cafedude.classfile.ConstPool;
+import software.coley.cafedude.classfile.Method;
+import software.coley.cafedude.classfile.attribute.Attribute;
+import software.coley.cafedude.classfile.attribute.CodeAttribute;
+import software.coley.cafedude.classfile.constant.CpClass;
+import software.coley.cafedude.classfile.constant.CpEntry;
+import software.coley.cafedude.classfile.constant.CpFieldRef;
+import software.coley.cafedude.classfile.constant.CpMethodRef;
+import software.coley.cafedude.classfile.constant.CpNameType;
+import software.coley.cafedude.classfile.constant.CpUtf8;
+import software.coley.cafedude.classfile.instruction.CpRefInstruction;
+import software.coley.cafedude.classfile.instruction.Instruction;
+import software.coley.cafedude.classfile.instruction.Opcodes;
+import software.coley.cafedude.io.ClassFileReader;
+import software.coley.cafedude.io.ClassFileWriter;
+import software.coley.lljzip.ZipIO;
+import software.coley.lljzip.format.compression.DeflateDecompressor;
+import software.coley.lljzip.format.compression.ZipCompressions;
+import software.coley.lljzip.format.model.LocalFileHeader;
+import software.coley.lljzip.format.model.PartType;
+import software.coley.lljzip.format.model.ZipArchive;
+import software.coley.lljzip.format.model.ZipPart;
+import software.coley.lljzip.format.write.ZipOutputStreamZipWriter;
+import software.coley.lljzip.util.MemorySegmentUtil;
+import software.coley.lljzip.util.data.MemorySegmentData;
 
 public class LWJGL3Transformer {
 
+    @NotNull
     private static final String HELPER3 = "de/geolykt/starloader/lwjgl3ify/Helper";
+    @NotNull
     private static final String APPCFG3 = "com/badlogic/gdx/backends/lwjgl3/Lwjgl3ApplicationConfiguration";
 
     private static final List<String> FORBID_LIST = Arrays.asList("META-INF/maven/com.badlogicgames.gdx/gdx-backend-lwjgl/",
@@ -66,22 +66,25 @@ public class LWJGL3Transformer {
     private static final Map<String, String> DIRECT_MAPPINGS = new HashMap<>();
 
     public static void invoke(@NotNull Path source, @NotNull Path target) {
-        ZipArchive archive;
-        try {
-            archive = ZipIO.readJvm(source);
+        try (ZipArchive archive = ZipIO.readJvm(source)) {
+            LWJGL3Transformer.invoke(Objects.requireNonNull(archive, "'archive' may not be null"), target);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
 
-        Iterator<ZipPart> parts = archive.getParts().iterator();
+    public static void invoke(@NotNull ZipArchive archive, @NotNull Path target) throws IOException {
+        Iterator<ZipPart> parts = archive.iterator();
+
         while (parts.hasNext()) {
             ZipPart part = parts.next();
             if (part.type() != PartType.LOCAL_FILE_HEADER) {
                 continue;
             }
+
             LocalFileHeader header = (LocalFileHeader) part;
             String name = header.getFileNameAsString();
-            for (String list : FORBID_LIST) {
+            for (String list : LWJGL3Transformer.FORBID_LIST) {
                 if (name.contains(list)) {
                     parts.remove();
                 }
@@ -89,53 +92,34 @@ public class LWJGL3Transformer {
 
             if (name.contains("com/example/Main")
                     || name.equals("snoddasmannen/galimulator/")) {
-                 try {
-                    ByteData data = ZipCompressions.decompress(header);
-                    data = LWJGL3Transformer.transformClassBytes(data);
-                    if (data != null) {
-                        header.setFileData(data);
-                        header.setCompressionMethod(ZipCompressions.STORED);
-                        // Other values (such as the CRC or the compressed/decompressed size) are not needed right now due to the implementation of the JavaZipWriterStrategy.
-                    }
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
+                MemorySegment segment = header.decompress(DeflateDecompressor.INSTANCE);
+                MemorySegmentData data = LWJGL3Transformer.transformClassBytes(Objects.requireNonNull(segment, "'segment' may not be null"));
+                if (data != null) {
+                    header.setFileData(data);
+                    header.setCompressionMethod(ZipCompressions.STORED);
+                    // Other values (such as the CRC or the compressed/decompressed size) are not needed right now due to the implementation of the JavaZipWriterStrategy.
                 }
             }
         }
 
-        Iterator<CentralDirectoryFileHeader> headers = archive.getCentralDirectories().iterator();
-        while (headers.hasNext()) {
-            CentralDirectoryFileHeader header = headers.next();
-            String name = header.getFileNameAsString();
-            for (String list : FORBID_LIST) {
-                if (name.contains(list)) {
-                    headers.remove();
-                }
-            }
-        }
-
-        ZipWriterStrategy writeStrategy = new JavaZipWriterStrategy();
-
-        try {
-            writeStrategy.writeToDisk(archive, target);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        new ZipOutputStreamZipWriter().writeToDisk(archive, target);
     }
 
     @Nullable
-    private static ByteData transformClassBytes(ByteData data) {
-        if (data.length() < 1) {
+    private static MemorySegmentData transformClassBytes(@NotNull MemorySegment data) {
+        if (data.byteSize() < 1) {
             return null;
         }
-        byte[] bytes = ByteDataUtil.toByteArray(data);
+
+        byte[] bytes = MemorySegmentUtil.toByteArray(data);
+
         try {
             ClassFile file = new ClassFileReader().read(bytes);
             boolean transformed = transformClass(file);
             if (!transformed) {
                 return null;
             }
-            return BufferData.wrap(new ClassFileWriter().write(file));
+            return MemorySegmentData.of(Objects.requireNonNull(new ClassFileWriter().write(file)));
         } catch (Throwable t) {
             LoggerFactory.getLogger(LWJGL3Transformer.class).warn("Unable to transform bytes", t);
             return null;
@@ -146,8 +130,10 @@ public class LWJGL3Transformer {
         boolean transformed = false;
         ConstPool pool = file.getPool();
         StringBuilder sharedBuilder = new StringBuilder();
+
         for (int i = 0; i < pool.size(); i++) {
-            ConstPoolEntry entry = pool.get(i);
+            CpEntry entry = pool.get(i);
+
             if (entry instanceof CpUtf8) {
                 CpUtf8 utf = (CpUtf8) entry;
                 String in = utf.getText();
@@ -177,129 +163,131 @@ public class LWJGL3Transformer {
                 transformed = true;
             }
         }
-        InstructionReader insnReader = new InstructionReader();
-        InstructionWriter insnWriter = new InstructionWriter();
+
         for (Method method : file.getMethods()) {
             for (Attribute attr : method.getAttributes()) {
                 if (!(attr instanceof CodeAttribute)) {
                     continue;
                 }
                 CodeAttribute code = (CodeAttribute) attr;
-                List<Instruction> instructions = insnReader.read(code);
-                boolean modified = false;
+                List<Instruction> instructions = code.getInstructions();
                 int insnLen = instructions.size();
                 for (int i = 0 ; i < insnLen; i++) {
                     Instruction insn = instructions.get(i);
                     if (insn.getOpcode() == Opcodes.PUTFIELD) {
-                        CpFieldRef fieldRef = (CpFieldRef) pool.get(((IntOperandInstruction) insn).getOperand());
-                        String cname = pool.getUtf(((CpClass) pool.get(fieldRef.getClassIndex())).getIndex());
-                        if (cname.equals(APPCFG3)) {
-                            CpNameType nameType = (CpNameType) pool.get(fieldRef.getNameTypeIndex());
-                            String name = pool.getUtf(nameType.getNameIndex());
-                            String type = pool.getUtf(nameType.getTypeIndex());
+                        CpFieldRef fieldRef = (CpFieldRef) ((CpRefInstruction) insn).getEntry();
+                        String cname = fieldRef.getClassRef().getName().getText();
+                        if (cname.equals(LWJGL3Transformer.APPCFG3)) {
+                            CpNameType nameType = fieldRef.getNameType();
+                            String name = nameType.getName().getText();
+                            String type = nameType.getType().getText();
                             String mname = "set" + ((char) Character.toUpperCase(name.codePointAt(0))) + name.substring(1);
                             String mtype; 
                             int opcode;
-                            int clazz;
+                            CpClass clazz;
+
                             if (mname.equals("setWidth") || mname.equals("setHeight")) {
                                 opcode = Opcodes.INVOKESTATIC;
-                                mtype = "(L" + APPCFG3 + ";" + type + ")V";
-                                clazz = writeClass(pool, writeUTF8(pool, HELPER3));
+                                mtype = "(L" + LWJGL3Transformer.APPCFG3 + ";" + type + ")V";
+                                clazz = LWJGL3Transformer.writeClass(pool, LWJGL3Transformer.writeUTF8(pool, LWJGL3Transformer.HELPER3));
                             } else if (mname.equals("setForegroundFPS")) {
                                 // The method doesn't exist in libGDX 1.9.11, so we need to use the closest matching thing.
                                 mname = "setIdleFPS";
                                 opcode = Opcodes.INVOKEVIRTUAL;
                                 mtype = "(" + type + ")V";
-                                clazz = fieldRef.getClassIndex();
+                                clazz = fieldRef.getClassRef();
                             } else {
                                 opcode = Opcodes.INVOKEVIRTUAL;
                                 mtype = "(" + type + ")V";
-                                clazz = fieldRef.getClassIndex();
+                                clazz = fieldRef.getClassRef();
                             }
-                            int methodIndex = writeMethodRef(pool,
+
+                            assert clazz != null;
+
+                            CpMethodRef methodRef = LWJGL3Transformer.writeMethodRef(pool,
                                     clazz,
-                                    writeNameType(pool,
-                                            writeUTF8(pool, mname),
-                                            writeUTF8(pool, mtype)));
-                            instructions.set(i, new IntOperandInstruction(opcode, methodIndex));
-                            modified = true;
+                                    LWJGL3Transformer.writeNameType(pool,
+                                            LWJGL3Transformer.writeUTF8(pool, mname),
+                                            LWJGL3Transformer.writeUTF8(pool, mtype)));
+                            instructions.set(i, new CpRefInstruction(opcode, methodRef));
+                            transformed = true;
                         }
                     } else if (insn.getOpcode() == Opcodes.INVOKEVIRTUAL) {
-                        CpMethodRef methodRef = (CpMethodRef) pool.get(((IntOperandInstruction) insn).getOperand());
-                        String cname = pool.getUtf(((CpClass) pool.get(methodRef.getClassIndex())).getIndex());
-                        if (cname.equals(APPCFG3)) {
-                            CpNameType nameType = (CpNameType) pool.get(methodRef.getNameTypeIndex());
-                            String name = pool.getUtf(nameType.getNameIndex());
-                            if (name.equals("addIcon")) {
-                                instructions.set(i, new IntOperandInstruction(Opcodes.INVOKESTATIC,
-                                        writeMethodRef(pool, writeClass(pool, writeUTF8(pool, HELPER3)),
-                                                writeNameType(pool, nameType.getNameIndex(), writeUTF8(pool, "(L" + APPCFG3 + ";Ljava/lang/String;Lcom/badlogic/gdx/Files$FileType;)V")))));
-                                modified = true;
+                        CpMethodRef methodRef = (CpMethodRef) ((CpRefInstruction) insn).getEntry();
+                        String cname = methodRef.getClassRef().getName().getText();
+                        if (cname.equals(LWJGL3Transformer.APPCFG3)) {
+                            CpNameType nameType = methodRef.getNameType();
+                            CpUtf8 name = nameType.getName();
+                            if (name.getText().equals("addIcon")) {
+                                instructions.set(i, new CpRefInstruction(Opcodes.INVOKESTATIC,
+                                        LWJGL3Transformer.writeMethodRef(pool, LWJGL3Transformer.writeClass(pool, LWJGL3Transformer.writeUTF8(pool, LWJGL3Transformer.HELPER3)),
+                                                LWJGL3Transformer.writeNameType(pool, name, LWJGL3Transformer.writeUTF8(pool, "(L" + LWJGL3Transformer.APPCFG3 + ";Ljava/lang/String;Lcom/badlogic/gdx/Files$FileType;)V")))));
+                                transformed = true;
                             }
                         }
                     }
-                }
-                if (modified) {
-                    code.setCode(insnWriter.writeCode(instructions));
-                    transformed = true;
                 }
             }
         }
         return transformed;
     }
 
-    private static int writeClass(ConstPool pool, int str) {
-        int len = pool.size();
-        for (int i = 0; i < len; i++) {
-            ConstPoolEntry e = pool.get(i);
-            if (e instanceof CpClass && ((CpClass) e).getIndex() == str) {
-                return i;
+    @NotNull
+    private static CpClass writeClass(@NotNull ConstPool pool, @NotNull CpUtf8 name) {
+        for (CpEntry entry : pool) {
+            if (entry instanceof CpClass cpClass
+                    && cpClass.getName() == name) {
+                return cpClass;
             }
         }
-        pool.add(new CpClass(str));
-        return len + 1;
+
+        CpClass cpClass = new CpClass(name);
+        pool.add(cpClass);
+        return cpClass;
     }
 
-    private static int writeNameType(ConstPool pool, int name, int desc) {
-        int len = pool.size();
-        for (int i = 0; i < len; i++) {
-            ConstPoolEntry e = pool.get(i);
-            if (e instanceof CpNameType) {
-                CpNameType mref = (CpNameType) e;
-                if (mref.getNameIndex() == name && mref.getTypeIndex() == desc) {
-                    return i;
-                }
+    @NotNull
+    private static CpNameType writeNameType(@NotNull ConstPool pool, @NotNull CpUtf8 name, @NotNull CpUtf8 type) {
+        for (CpEntry entry : pool) {
+            if (entry instanceof CpNameType cpNameType
+                    && cpNameType.getName() == name
+                    && cpNameType.getType() == type) {
+                return cpNameType;
             }
         }
-        pool.add(new CpNameType(name, desc));
-        return len + 1;
+
+        CpNameType cpNameType = new CpNameType(name, type);
+        pool.add(cpNameType);
+        return cpNameType;
     }
 
-    private static int writeMethodRef(ConstPool pool, int clazz, int nameType) {
-        int len = pool.size();
-        for (int i = 0; i < len; i++) {
-            ConstPoolEntry e = pool.get(i);
-            if (e instanceof CpMethodRef) {
-                CpMethodRef mref = (CpMethodRef) e;
-                if (mref.getClassIndex() == clazz && mref.getNameTypeIndex() == nameType) {
-                    return i;
-                }
+    @NotNull
+    private static CpMethodRef writeMethodRef(@NotNull ConstPool pool, @NotNull CpClass clazz, @NotNull CpNameType nameType) {
+        for (CpEntry entry : pool) {
+            if (entry instanceof CpMethodRef mref
+                    && mref.getClassRef() == clazz
+                    && mref.getNameType() == nameType) {
+                return mref;
             }
         }
-        pool.add(new CpMethodRef(clazz, nameType));
-        return len + 1;
+
+        CpMethodRef ref = new CpMethodRef(clazz, nameType);
+        pool.add(ref);
+        return ref;
     }
 
-    private static int writeUTF8(ConstPool pool, String str) {
-        int len = pool.size();
-        for (int i = 0; i < len; i++) {
-            ConstPoolEntry e = pool.get(i);
-            if (e instanceof CpUtf8 && ((CpUtf8) e).getText().equals(str)) {
-                return i;
+    @NotNull
+    private static CpUtf8 writeUTF8(@NotNull ConstPool pool, @NotNull String str) {
+        for (CpEntry entry : pool) {
+            if (entry instanceof CpUtf8 cpUtf8
+                    && cpUtf8.getText().equals(str)) {
+                return cpUtf8;
             }
         }
-        pool.add(new CpUtf8(str));
-        return len + 1;
+
+        CpUtf8 cpUtf8 = new CpUtf8(str);
+        pool.add(cpUtf8);
+        return cpUtf8;
     }
 
     private static boolean remapSignature(StringBuilder signatureOut, String signature, int start, int end) {
@@ -388,7 +376,7 @@ public class LWJGL3Transformer {
         }
         int length = input.length();
         String internalName = input.substring(indexofL + 1, length - 1);
-        String newInternalName = DIRECT_MAPPINGS.get(internalName);
+        String newInternalName = LWJGL3Transformer.DIRECT_MAPPINGS.get(internalName);
         if (newInternalName == null) {
             return input;
         }
@@ -403,7 +391,7 @@ public class LWJGL3Transformer {
     }
 
     static {
-        DIRECT_MAPPINGS.put("com/badlogic/gdx/backends/lwjgl/LwjglApplication", "com/badlogic/gdx/backends/lwjgl3/Lwjgl3Application");
-        DIRECT_MAPPINGS.put("com/badlogic/gdx/backends/lwjgl/LwjglApplicationConfiguration", "com/badlogic/gdx/backends/lwjgl3/Lwjgl3ApplicationConfiguration");
+        LWJGL3Transformer.DIRECT_MAPPINGS.put("com/badlogic/gdx/backends/lwjgl/LwjglApplication", "com/badlogic/gdx/backends/lwjgl3/Lwjgl3Application");
+        LWJGL3Transformer.DIRECT_MAPPINGS.put("com/badlogic/gdx/backends/lwjgl/LwjglApplicationConfiguration", "com/badlogic/gdx/backends/lwjgl3/Lwjgl3ApplicationConfiguration");
     }
 }

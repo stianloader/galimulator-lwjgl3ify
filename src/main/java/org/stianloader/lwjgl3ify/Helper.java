@@ -1,4 +1,4 @@
-package de.geolykt.starloader.lwjgl3ify;
+package org.stianloader.lwjgl3ify;
 
 import java.util.ArrayList;
 import java.util.List;
