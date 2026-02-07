@@ -45,23 +45,40 @@ import software.coley.lljzip.util.data.MemorySegmentData;
 public class LWJGL3Transformer {
 
     @NotNull
-    private static final String HELPER3 = "de/geolykt/starloader/lwjgl3ify/Helper";
+    private static final String HELPER3 = "de/geolykt/starloader/lwjgl3ify/replacements/Helper";
     @NotNull
     private static final String APPCFG3 = "com/badlogic/gdx/backends/lwjgl3/Lwjgl3ApplicationConfiguration";
 
-    private static final List<String> FORBID_LIST = Arrays.asList("META-INF/maven/com.badlogicgames.gdx/gdx-backend-lwjgl/",
-            "com/badlogic/gdx/backends/lwjgl/",
-            "org/lwjgl/",
-            "OpenAL32.dll",
-            "OpenAL64.dll",
-            "lwjgl.dll",
-            "lwjgl64.dll",
-            "liblwjgl.so",
-            "liblwjgl64.so",
-            "libopenal.so",
-            "libopenal64.so",
-            "liblwjgl.dylib",
-            "openal.dylib");
+    private static final List<String> FILTER_LIST = Arrays.asList(
+        "META-INF/maven/com.badlogicgames",
+        "META-INF/maven/net.java.jutils",
+        "META-INF/maven/org.jcraft",
+        "com/badlogic/gdx/",
+        "com/jcraft/",
+        "org/lwjgl/",
+        "junit/",
+        "javazoom/jl/",
+        "net/java/games/",
+        "libgdx.so",
+        "libgdx.dll",
+        "libgdx.dylib",
+        "libgdx64.so",
+        "libgdx64.dll",
+        "libgdx64.dylib",
+        "libjinput-linux.so",
+        "libjinput-linux64.so",
+        "libjinput-osx.jnilib",
+        "OpenAL32.dll",
+        "OpenAL64.dll",
+        "lwjgl.dll",
+        "lwjgl64.dll",
+        "liblwjgl.so",
+        "liblwjgl64.so",
+        "libopenal.so",
+        "libopenal64.so",
+        "liblwjgl.dylib",
+        "openal.dylib"
+    );
 
     private static final Map<String, String> DIRECT_MAPPINGS = new HashMap<>();
 
@@ -84,7 +101,7 @@ public class LWJGL3Transformer {
 
             LocalFileHeader header = (LocalFileHeader) part;
             String name = header.getFileNameAsString();
-            for (String list : LWJGL3Transformer.FORBID_LIST) {
+            for (String list : LWJGL3Transformer.FILTER_LIST) {
                 if (name.contains(list)) {
                     parts.remove();
                 }
