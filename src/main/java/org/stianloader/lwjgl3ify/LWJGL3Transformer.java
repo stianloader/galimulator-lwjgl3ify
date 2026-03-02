@@ -45,7 +45,7 @@ import software.coley.lljzip.util.data.MemorySegmentData;
 public class LWJGL3Transformer {
 
     @NotNull
-    private static final String HELPER3 = "de/geolykt/starloader/lwjgl3ify/replacements/Helper";
+    private static final String HELPER3 = "org/stianloader/lwjgl3ify/Helper";
     @NotNull
     private static final String APPCFG3 = "com/badlogic/gdx/backends/lwjgl3/Lwjgl3ApplicationConfiguration";
 
